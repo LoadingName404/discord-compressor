@@ -28,3 +28,8 @@ htmlcov/
 # IDE-specific settings (Optional but recommended)
 .vscode/
 .idea/
+
+
+# Logs and temporary files
+logs/
+*.log

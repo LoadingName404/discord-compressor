@@ -15,11 +15,31 @@ import sys
 import threading
 import time
 import uuid
+import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 
 app = Flask(__name__, static_folder="static")
+
+# ─── Logging ────────────────────────────────────────────────────────────────
+LOG_FILE = Path(__file__).parent / "compressor.log"
+_log_fmt = logging.Formatter("%(asctime)s [%(levelname)-7s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+
+log = logging.getLogger("compressor")
+log.setLevel(logging.DEBUG)
+
+_fh = RotatingFileHandler(LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
+_fh.setLevel(logging.DEBUG)
+_fh.setFormatter(_log_fmt)
+
+_ch = logging.StreamHandler(sys.stdout)
+_ch.setLevel(logging.INFO)
+_ch.setFormatter(_log_fmt)
+
+log.addHandler(_fh)
+log.addHandler(_ch)
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 HOST = "127.0.0.1"
@@ -231,6 +251,7 @@ def add_job():
             }
             jobs[job_id] = job
             added.append(job)
+            log.info("JOB %s QUEUED  %s", job_id, Path(item["input"]).name)
 
     # Start worker if not running
     _ensure_worker()
@@ -248,6 +269,7 @@ def cancel_job(job_id):
 
         if job["status"] == "running":
             job["status"] = "cancelled"
+            log.info("JOB %s CANCEL  %s (was running)", job_id, job["filename"])
             with process_lock:
                 if current_process and current_process.poll() is None:
                     try:
@@ -256,6 +278,7 @@ def cancel_job(job_id):
                         pass
         elif job["status"] == "queued":
             job["status"] = "cancelled"
+            log.info("JOB %s CANCEL  %s (was queued)", job_id, job["filename"])
 
     return jsonify({"ok": True})
 
@@ -268,6 +291,21 @@ def clear_jobs():
         for jid in to_remove:
             del jobs[jid]
     return jsonify({"removed": len(to_remove)})
+
+
+@app.route("/api/logs")
+def get_logs():
+    """Return last N lines of the log file, optionally filtered by level."""
+    n = min(int(request.args.get("n", 300)), 1000)
+    level = request.args.get("level", "all").upper()
+    try:
+        with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+        if level != "ALL":
+            lines = [l for l in lines if f"[{level}" in l]
+        return jsonify({"lines": [l.rstrip() for l in lines[-n:]], "file": str(LOG_FILE)})
+    except FileNotFoundError:
+        return jsonify({"lines": [], "file": str(LOG_FILE)})
 
 
 # ─── Routes: Progress SSE ───────────────────────────────────────────────────
@@ -321,20 +359,46 @@ def _worker_loop():
         _run_job(job)
 
 
+_RE_PROGRESS = re.compile(r"frame=\s*\d+.*fps=|time=\d+:\d+")
+
+
+def _log_ffmpeg_error(job: dict, cmd: str, pass_num: int, returncode: int, stderr_lines: list[str]):
+    """Log full ffmpeg output for a failed job and update job state."""
+    non_progress = [l for l in stderr_lines if not _RE_PROGRESS.search(l)]
+
+    log.error("JOB %s FAILED  %s (pass %d, exit code %d)", job["id"], job["filename"], pass_num, returncode)
+    log.error("  cmd: %s", cmd)
+    if non_progress:
+        log.error("  ffmpeg stderr:")
+        for line in non_progress:
+            log.error("    %s", line)
+    else:
+        log.error("  (no stderr captured)")
+
+    ui_lines = [l.strip() for l in non_progress[-5:] if l.strip()]
+    ui_error = "\n".join(ui_lines) if ui_lines else f"Salió con código {returncode}"
+
+    with jobs_lock:
+        job["status"] = "error"
+        job["error"] = ui_error
+
+
 def _run_job(job):
     global current_process
     commands = job["command"]  # list of command strings
     duration = job["duration"]
+
+    log.info("JOB %s START   %s (%d pass%s)", job["id"], job["filename"],
+             len(commands), "es" if len(commands) > 1 else "")
 
     for i, cmd in enumerate(commands):
         if job["status"] == "cancelled":
             return
 
         is_last_pass = (i == len(commands) - 1)
+        log.debug("JOB %s pass %d/%d  cmd: %s", job["id"], i + 1, len(commands), cmd)
 
         try:
-            # Parse command string to list
-            # Use shell=True on Windows for proper path handling
             use_shell = platform.system() == "Windows"
 
             with process_lock:
@@ -348,8 +412,8 @@ def _run_job(job):
                     errors="replace",
                 )
 
-            # Parse ffmpeg progress from stderr
             line_buffer = ""
+            stderr_lines: list[str] = []
             while True:
                 if job["status"] == "cancelled":
                     with process_lock:
@@ -362,7 +426,9 @@ def _run_job(job):
                     break
 
                 if char in ("\r", "\n"):
-                    _parse_progress_line(line_buffer, job, duration, is_last_pass, len(commands))
+                    if line_buffer:
+                        stderr_lines.append(line_buffer)
+                        _parse_progress_line(line_buffer, job, duration, is_last_pass, len(commands))
                     line_buffer = ""
                 else:
                     line_buffer += char
@@ -370,12 +436,11 @@ def _run_job(job):
             current_process.wait()
 
             if current_process.returncode != 0 and job["status"] != "cancelled":
-                with jobs_lock:
-                    job["status"] = "error"
-                    job["error"] = f"ffmpeg exited with code {current_process.returncode}"
+                _log_ffmpeg_error(job, cmd, i + 1, current_process.returncode, stderr_lines)
                 return
 
         except Exception as e:
+            log.exception("JOB %s unexpected error: %s", job["id"], e)
             with jobs_lock:
                 job["status"] = "error"
                 job["error"] = str(e)
@@ -386,11 +451,12 @@ def _run_job(job):
         with jobs_lock:
             job["status"] = "done"
             job["progress"] = 100
-            # Get output file size
             try:
                 job["output_size"] = Path(job["output"]).stat().st_size
+                log.info("JOB %s DONE    %s → %.2f MB", job["id"], job["filename"],
+                         job["output_size"] / 1048576)
             except Exception:
-                pass
+                log.info("JOB %s DONE    %s", job["id"], job["filename"])
 
 
 def _parse_progress_line(line: str, job: dict, duration: float, is_last_pass: bool, total_passes: int):
@@ -427,19 +493,23 @@ def _split_cmd(cmd: str) -> list[str]:
 
 # ─── Startup ────────────────────────────────────────────────────────────────
 def main():
-    # Check ffmpeg/ffprobe
     for tool in ("ffmpeg", "ffprobe"):
         try:
-            subprocess.run([tool, "-version"], capture_output=True, timeout=5)
+            result = subprocess.run([tool, "-version"], capture_output=True, timeout=5)
+            version_line = result.stdout.decode("utf-8", errors="replace").splitlines()[0] if result.stdout else "unknown"
+            log.info("%s: %s", tool, version_line)
         except FileNotFoundError:
             print(f"[ERROR] {tool} not found in PATH!")
             print("Install ffmpeg: https://ffmpeg.org/download.html")
             sys.exit(1)
 
+    log.info("Server starting — http://%s:%d  log: %s", HOST, PORT, LOG_FILE)
+
     print(f"""
 ╔══════════════════════════════════════════════╗
 ║   Discord Video Compressor                   ║
 ║   http://{HOST}:{PORT}                       ║
+║   Log: compressor.log                        ║
 ║   Press Ctrl+C to stop                       ║
 ╚══════════════════════════════════════════════╝
 """)

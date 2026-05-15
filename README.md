@@ -1,16 +1,41 @@
 # Discord Video Compressor
 
-Herramienta local para comprimir y convertir videos antes de enviarlos por Discord. Corre un servidor web en tu máquina y se maneja desde el navegador.
+Herramienta personal para comprimir y convertir videos antes de enviarlos por Discord.
+No está pensada para uso público — la comparto por si alguien la quiere descargar y adaptar a su setup.
+
+## Por qué existe
+
+Saco clips de Steam seguido y siempre terminaba corriendo comandos de ffmpeg a mano para comprimir al límite de Discord:
+
+- **10 MB** en servidores normales
+- **50 MB** con Nitro básico
+- **100 MB** en servidores mejorados
+- **500 MB** con Nitro completo
+
+Hacer eso a mano cada vez era tedioso, así que hice este automatizador con UI en el navegador.
+
+El modo **Convertir** lo agregué por la cámara — tengo una Sony HandyCam DCR-SX45 del 2011 que graba en formatos legacy que Discord ni siquiera puede previsualizar. El modo convierte esos videos a MP4 moderno.
+
+## Los perfiles de equipo
+
+Los tres perfiles hardcodeados en la app son mis tres máquinas. Si querés usarlo en otro hardware, editá el array `PC_PROFILES` en [static/index.html](static/index.html).
+
+| Perfil | Specs |
+|---|---|
+| Desktop | i5-10400F · GT 1030 (NVENC) · 16 GB · Windows 10 |
+| Laptop | ASUS VivoBook 14 · Ryzen 5 7520U · Radeon integrado · 16 GB · Windows 11 |
+| ThinkCentre | i5-8400T · iGPU Intel (QSV) · 16 GB · Ubuntu Server |
 
 ## Características
 
-- **Modo Comprimir** — calcula el bitrate exacto para que el video entre en el límite de Discord (10 MB free, 50 MB Nitro, o lo que configures)
-- **Modo Convertir** — convierte videos legacy (HandyCam, VHS capturado, DVD) a MP4 con calidad constante (CRF)
+- **Modo Comprimir** — calcula el bitrate exacto para que el video entre en el límite de tamaño configurado, con encoding de dos pasadas para máxima precisión
+- **Modo Convertir** — convierte video legacy (HandyCam, DVD, VHS capturado) a MP4 con calidad constante (CRF)
 - **Encoders de hardware** — NVENC (Nvidia), AMF (AMD), Quick Sync (Intel) además de libx264/libx265 por CPU
-- **Cola de trabajos** — procesa múltiples archivos en secuencia con progreso en tiempo real vía SSE
-- **Explorador de archivos** integrado en el navegador, con soporte de unidades en Windows
+- **Cola de trabajos** — procesa múltiples archivos en secuencia con progreso en tiempo real
+- **Explorador de archivos** integrado, con soporte de unidades en Windows
 - **Detección automática** de video entrelazado (480i, 1080i) con deinterlace yadif/bwdif
-- **Corrección de SAR** para videos con píxeles no cuadrados
+- **Corrección de SAR** para videos con píxeles no cuadrados (formato HandyCam, DVD anamórfico)
+- **Log rotativo** en `compressor.log` con visor integrado en la UI
 
 ## Requisitos
 
@@ -43,18 +68,8 @@ Abre `http://localhost:5000` en el navegador.
 
 1. Navega al archivo desde el explorador lateral
 2. Selecciona uno o más videos
-3. Elige el modo (**Comprimir** o **Convertir**) y configura el encoder
-4. Haz clic en **Agregar a cola** — el video se guarda como `nombre_discord.mp4` en la misma carpeta del original
-
-## Perfiles de equipo
-
-Los perfiles están definidos en [static/index.html](static/index.html) dentro del array `PC_PROFILES`. Cada uno especifica qué encoders de hardware tiene disponibles y cuántos threads usar. Edítalos para que coincidan con tu hardware.
-
-| Perfil | Hardware |
-|---|---|
-| Desktop | i5-10400F + GT 1030 (NVENC) |
-| Laptop | Ryzen 5 7520U + Radeon (AMF) |
-| ThinkCentre | i5-8400T Ubuntu (QSV) |
+3. Elige el modo (**Comprimir** o **Convertir**) y tu perfil de equipo
+4. Hacé clic en **Agregar a cola** — el output se guarda como `nombre_discord.mp4` en la misma carpeta
 
 ## Encoders soportados
 
@@ -63,7 +78,7 @@ Los perfiles están definidos en [static/index.html](static/index.html) dentro d
 | `libx264` | CPU | Dos pasadas, máxima precisión de bitrate |
 | `libx265` | CPU | ~30% mejor compresión que H.264 |
 | `h264_nvenc` | GPU Nvidia | Ultra rápido, requiere driver reciente |
-| `h264_amf` / `hevc_amf` | GPU AMD | Radeon RX 5000+ o APUs recientes |
+| `h264_amf` / `hevc_amf` | GPU AMD | APUs y discretas Radeon |
 | `h264_qsv` / `hevc_qsv` | iGPU Intel | Quick Sync, Gen 6+ |
 
 ## Estructura
@@ -71,6 +86,7 @@ Los perfiles están definidos en [static/index.html](static/index.html) dentro d
 ```
 discord-compressor/
 ├── compressor.py      # Servidor Flask + worker ffmpeg
+├── compressor.log     # Log rotativo (generado al correr)
 └── static/
     └── index.html     # UI completa (JS vanilla, sin dependencias de build)
 ```
