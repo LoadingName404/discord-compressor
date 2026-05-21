@@ -25,7 +25,7 @@ Cada máquina tiene su propio archivo JSON en la carpeta [`profiles/`](profiles/
 Desde la UI, hacé clic en **+ Nuevo perfil** junto a la sección "Equipo". El wizard hace tres cosas:
 
 1. **Detecta el sistema** — OS, nombre del CPU y cantidad de threads
-2. **Testea encoders** — corre un encode de prueba de 1 segundo con video sintético (`testsrc` de ffmpeg) para cada encoder conocido (NVENC, AMF, QSV, libx264, libx265, etc.) y marca cuáles son compatibles con tu hardware
+2. **Testea encoders** — corre un encode de prueba de 1 segundo con video sintético (`testsrc` de ffmpeg) para cada encoder conocido (NVENC, AMF, QSV, VAAPI, libx264, libx265, etc.) y marca cuáles son compatibles con tu hardware. Para encoders VAAPI usa el dispositivo de render correcto (`/dev/dri/renderD128`), que es lo que funciona en Linux.
 3. **Configura el perfil** — te muestra solo los encoders que funcionaron, editás el nombre y guardás
 
 El perfil se guarda automáticamente en `profiles/{id}.json` y queda disponible de inmediato.
@@ -54,13 +54,17 @@ Los valores de `hwEncoders` y `swEncoders` tienen que coincidir con los IDs de e
 |---|---|
 | Desktop | i5-10400F · GT 1030 · 16 GB · Windows 10 (CPU encoding, NVENC no disponible en esta GPU) |
 | Laptop | ASUS VivoBook 14 · Ryzen 5 7520U · Radeon integrado · 16 GB · Windows 11 |
-| ThinkCentre | i5-8400T · iGPU Intel (QSV) · 16 GB · Ubuntu Server |
+| ThinkCentre | i5-8400T · iGPU Intel (VAAPI) · 16 GB · Ubuntu Server |
 
 ## Características
 
 - **Modo Comprimir** — calcula el bitrate exacto para que el video entre en el límite de tamaño configurado, con encoding de dos pasadas para máxima precisión
 - **Modo Convertir** — convierte video legacy (HandyCam, DVD, VHS capturado) a MP4 con calidad constante (CRF)
-- **Encoders de hardware** — NVENC (Nvidia), AMF (AMD), Quick Sync (Intel) además de libx264/libx265 por CPU
+- **Encoders de hardware** — NVENC (Nvidia), AMF (AMD), Quick Sync/VAAPI (Intel) además de libx264/libx265 por CPU
+- **Selección de pista de audio** — si el video tiene múltiples pistas de audio, aparece un dropdown por archivo para elegir cuál incluir
+- **Grabado de subtítulos** — dropdown por archivo para elegir una pista de subtítulos y quemarla en el video:
+  - Subtítulos de texto (SRT, ASS): usa el filtro `subtitles` de ffmpeg
+  - Subtítulos de imagen (PGS, DVB/bitmap): usa `filter_complex` con scale proporcional y overlay centrado; el pass 1 del encoding de dos pasadas corre sin el overlay para evitar la divergencia de stats que causaba archivos gigantes
 - **Wizard de perfiles** — detecta OS y CPU, testea todos los encoders contra un clip sintético y genera el JSON del perfil desde la UI
 - **Cola de trabajos** — procesa múltiples archivos en secuencia con progreso en tiempo real
 - **Explorador de archivos** integrado, con soporte de unidades en Windows
@@ -72,6 +76,7 @@ Los valores de `hwEncoders` y `swEncoders` tienen que coincidir con los IDs de e
 
 - Python 3.10+
 - [ffmpeg y ffprobe](https://ffmpeg.org/download.html) en el PATH
+- Para VAAPI en Linux: driver de VA-API instalado (en Ubuntu: `intel-media-va-driver` o `i965-va-driver` según la generación del iGPU)
 
 ## Instalación
 
@@ -95,13 +100,14 @@ pip install flask
 python main.py
 ```
 
-Abre `http://localhost:5000` en el navegador.
+Abre `http://localhost:5000` en el navegador (o la IP de la máquina si corrés el servidor en otro equipo de la red).
 
 1. Si es la primera vez en un PC nuevo, hacé clic en **+ Nuevo perfil** para detectar encoders automáticamente
 2. Navega al archivo desde el explorador lateral
 3. Selecciona uno o más videos
 4. Elige el modo (**Comprimir** o **Convertir**) y tu perfil de equipo
-5. Hacé clic en **Agregar a cola** — el output se guarda como `nombre_discord.mp4` en la misma carpeta
+5. Si el video tiene múltiples pistas de audio o subtítulos, aparecen dropdowns por archivo para elegir
+6. Hacé clic en **Agregar a cola** — el output se guarda como `nombre_discord.mp4` en la misma carpeta
 
 ## Encoders soportados
 
@@ -109,9 +115,10 @@ Abre `http://localhost:5000` en el navegador.
 |---|---|---|
 | `libx264` | CPU | Dos pasadas, máxima precisión de bitrate |
 | `libx265` | CPU | ~30% mejor compresión que H.264 |
-| `h264_nvenc` | GPU Nvidia | Ultra rápido, requiere driver reciente |
+| `h264_nvenc` / `hevc_nvenc` | GPU Nvidia | Ultra rápido, requiere driver reciente |
 | `h264_amf` / `hevc_amf` | GPU AMD | APUs y discretas Radeon |
-| `h264_qsv` / `hevc_qsv` | iGPU Intel | Quick Sync, Gen 6+ |
+| `h264_qsv` / `hevc_qsv` | iGPU Intel (Windows) | Quick Sync, Gen 6+ |
+| `h264_vaapi` / `hevc_vaapi` | iGPU Intel (Linux) | VA-API vía `/dev/dri/renderD128`; preset controla velocidad de encoding (`-quality 0/4/7`) |
 
 ## Estructura
 

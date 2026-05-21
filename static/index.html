@@ -232,6 +232,7 @@ body { background: var(--bg); color: var(--text); font-family: 'Outfit', sans-se
 
 .hw-badge.nvenc { background: rgba(118,185,0,0.15); color: #76b900; border: 1px solid rgba(118,185,0,0.25); }
 .hw-badge.qsv { background: rgba(0,125,195,0.15); color: #0091e0; border: 1px solid rgba(0,125,195,0.25); }
+.hw-badge.vaapi { background: rgba(0,125,195,0.15); color: #0091e0; border: 1px solid rgba(0,125,195,0.25); }
 .hw-badge.amf { background: rgba(237,28,36,0.12); color: #f06; border: 1px solid rgba(237,28,36,0.2); }
 .hw-badge.cpu { background: rgba(255,255,255,0.06); color: var(--text-dim); border: 1px solid var(--border); }
 .hw-badge.os { background: rgba(88,101,242,0.1); color: #8890f8; border: 1px solid rgba(88,101,242,0.2); }
@@ -960,6 +961,40 @@ const ENCODERS = {
     buildBR: (br,pr,pf,vf,au,inp,out) => [`ffmpeg -y -i "${inp}" -c:v hevc_qsv -b:v ${br}k -preset ${pr} -pix_fmt ${pf}${vf} -tag:v hvc1 ${au} "${out}"`],
     buildCRF: (crf,pr,pf,vf,au,inp,out) => [`ffmpeg -y -i "${inp}" -c:v hevc_qsv -global_quality ${crf} -preset ${pr} -pix_fmt ${pf}${vf} -tag:v hvc1 ${au} "${out}"`],
   },
+  h264_vaapi: {
+    label: 'H.264 VAAPI — Intel', type: 'hw', codec: 'h264',
+    presets: ['quality','balanced','speed'], defaultPreset: 'quality',
+    hint: 'VAAPI — iGPU Intel (Linux) · quality=velocidad 0→más lento/mejor',
+    buildBR: (br,pr,pf,vf,au,inp,out) => {
+      const q = {quality:0, balanced:4, speed:7}[pr] ?? 0;
+      const m = vf.match(/^ -vf "(.+)"$/);
+      const hwvf = m ? ` -vf "${m[1]},format=nv12,hwupload"` : ' -vf "format=nv12,hwupload"';
+      return [`ffmpeg -y -vaapi_device /dev/dri/renderD128 -i "${inp}"${hwvf} -c:v h264_vaapi -b:v ${br}k -quality ${q} ${au} "${out}"`];
+    },
+    buildCRF: (qp,pr,pf,vf,au,inp,out) => {
+      const q = {quality:0, balanced:4, speed:7}[pr] ?? 0;
+      const m = vf.match(/^ -vf "(.+)"$/);
+      const hwvf = m ? ` -vf "${m[1]},format=nv12,hwupload"` : ' -vf "format=nv12,hwupload"';
+      return [`ffmpeg -y -vaapi_device /dev/dri/renderD128 -i "${inp}"${hwvf} -c:v h264_vaapi -qp ${qp} -quality ${q} ${au} "${out}"`];
+    },
+  },
+  hevc_vaapi: {
+    label: 'H.265 VAAPI — Intel', type: 'hw', codec: 'hevc',
+    presets: ['quality','balanced','speed'], defaultPreset: 'quality',
+    hint: 'VAAPI HEVC — mejor compresión (Linux) · quality=velocidad 0→más lento/mejor',
+    buildBR: (br,pr,pf,vf,au,inp,out) => {
+      const q = {quality:0, balanced:4, speed:7}[pr] ?? 0;
+      const m = vf.match(/^ -vf "(.+)"$/);
+      const hwvf = m ? ` -vf "${m[1]},format=nv12,hwupload"` : ' -vf "format=nv12,hwupload"';
+      return [`ffmpeg -y -vaapi_device /dev/dri/renderD128 -i "${inp}"${hwvf} -c:v hevc_vaapi -b:v ${br}k -quality ${q} -tag:v hvc1 ${au} "${out}"`];
+    },
+    buildCRF: (qp,pr,pf,vf,au,inp,out) => {
+      const q = {quality:0, balanced:4, speed:7}[pr] ?? 0;
+      const m = vf.match(/^ -vf "(.+)"$/);
+      const hwvf = m ? ` -vf "${m[1]},format=nv12,hwupload"` : ' -vf "format=nv12,hwupload"';
+      return [`ffmpeg -y -vaapi_device /dev/dri/renderD128 -i "${inp}"${hwvf} -c:v hevc_vaapi -qp ${qp} -quality ${q} -tag:v hvc1 ${au} "${out}"`];
+    },
+  },
 };
 
 // ═══════════════════════════════════════════════════
@@ -1299,6 +1334,7 @@ function renderProfiles() {
   if (activePC.hwEncoders.includes('h264_nvenc')) badges.push('<span class="hw-badge nvenc">NVENC</span>');
   if (activePC.hwEncoders.some(e => e.includes('amf'))) badges.push('<span class="hw-badge amf">AMF</span>');
   if (activePC.hwEncoders.some(e => e.includes('qsv'))) badges.push('<span class="hw-badge qsv">QSV</span>');
+  if (activePC.hwEncoders.some(e => e.includes('vaapi'))) badges.push('<span class="hw-badge vaapi">VAAPI</span>');
   $('hwBadges').innerHTML = badges.join('');
 }
 
@@ -1678,7 +1714,7 @@ $('btnRefreshLog').addEventListener('click', fetchLogs);
 // ═══════════════════════════════════════════════════
 //  PROFILE WIZARD
 // ═══════════════════════════════════════════════════
-const _WIZ_HW = ['h264_nvenc','hevc_nvenc','h264_amf','hevc_amf','h264_qsv','hevc_qsv','h264_videotoolbox','hevc_videotoolbox'];
+const _WIZ_HW = ['h264_nvenc','hevc_nvenc','h264_amf','hevc_amf','h264_qsv','hevc_qsv','h264_vaapi','hevc_vaapi','h264_videotoolbox','hevc_videotoolbox'];
 const _WIZ_SW = ['libx264','libx265'];
 const _WIZ_ALL = [..._WIZ_HW, ..._WIZ_SW];
 const _WIZ_LABELS = {
@@ -1686,6 +1722,7 @@ const _WIZ_LABELS = {
   h264_nvenc:'H.264 · NVIDIA', hevc_nvenc:'H.265 · NVIDIA',
   h264_amf:'H.264 · AMD', hevc_amf:'H.265 · AMD',
   h264_qsv:'H.264 · Intel', hevc_qsv:'H.265 · Intel',
+  h264_vaapi:'H.264 · Intel VAAPI', hevc_vaapi:'H.265 · Intel VAAPI',
   h264_videotoolbox:'H.264 · Apple', hevc_videotoolbox:'H.265 · Apple',
 };
 

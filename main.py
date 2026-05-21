@@ -192,16 +192,30 @@ def wizard_test_encoder():
     null_dev = "NUL" if platform.system() == "Windows" else "/dev/null"
     use_shell = platform.system() == "Windows"
 
-    cmd = [
-        "ffmpeg", "-y",
-        "-f", "lavfi",
-        "-i", "testsrc=duration=1:size=320x240:rate=30",
-        "-pix_fmt", "yuv420p",
-        "-c:v", encoder,
-        "-t", "1",
-        "-f", "null",
-        null_dev,
-    ]
+    _VAAPI_ENCODERS = {"h264_vaapi", "hevc_vaapi"}
+    if encoder in _VAAPI_ENCODERS:
+        cmd = [
+            "ffmpeg", "-y",
+            "-vaapi_device", "/dev/dri/renderD128",
+            "-f", "lavfi",
+            "-i", "testsrc=duration=1:size=320x240:rate=30",
+            "-vf", "format=nv12,hwupload",
+            "-c:v", encoder,
+            "-t", "1",
+            "-f", "null",
+            null_dev,
+        ]
+    else:
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "lavfi",
+            "-i", "testsrc=duration=1:size=320x240:rate=30",
+            "-pix_fmt", "yuv420p",
+            "-c:v", encoder,
+            "-t", "1",
+            "-f", "null",
+            null_dev,
+        ]
 
     try:
         result = subprocess.run(
