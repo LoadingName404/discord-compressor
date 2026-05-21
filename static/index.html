@@ -369,6 +369,22 @@ body { background: var(--bg); color: var(--text); font-family: 'Outfit', sans-se
 .probe-tag.legacy { background: rgba(237,66,69,0.1); color: var(--red); border: 1px solid rgba(237,66,69,0.2); }
 .probe-tag.ok { background: rgba(87,242,135,0.1); color: var(--green); border: 1px solid rgba(87,242,135,0.2); }
 
+/* ── Stream track selectors ── */
+.sel-file-streams {
+  display: flex; align-items: center; gap: 8px; margin-top: 5px;
+}
+.stream-label {
+  font-size: 0.72rem; color: var(--text-muted); min-width: 42px; flex-shrink: 0;
+}
+.stream-select {
+  flex: 1; min-width: 0;
+  background: var(--surface3); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text);
+  font-family: 'JetBrains Mono', monospace; font-size: 0.7rem;
+  padding: 3px 6px; outline: none; cursor: pointer;
+}
+.stream-select:focus { border-color: var(--accent); }
+
 /* ── Empty state ── */
 .empty-state {
   display: flex; flex-direction: column; align-items: center;
@@ -1129,6 +1145,7 @@ function renderSelectedFiles() {
   el.innerHTML = selectedFiles.map((f, i) => {
     let metaHTML = '';
     let tagsHTML = '';
+    let streamsHTML = '';
 
     if (f.probe === null) {
       metaHTML = '<div class="sel-file-loading">Analizando con ffprobe...</div>';
@@ -1158,6 +1175,37 @@ function renderSelectedFiles() {
       else if (v) tags.push(`<span class="probe-tag ok">${v.codec || 'OK'}</span>`);
 
       if (tags.length) tagsHTML = `<div class="probe-tags">${tags.join('')}</div>`;
+
+      // Stream selectors
+      const audioStreams = f.probe.audio_streams || [];
+      const subStreams = f.probe.subtitle_streams || [];
+
+      if (audioStreams.length > 1) {
+        const effAudio = f.selectedAudioStreamIdx ?? audioStreams[0]?.index;
+        streamsHTML += `<div class="sel-file-streams">
+          <span class="stream-label">Audio:</span>
+          <select class="stream-select stream-audio" data-idx="${i}">
+            ${audioStreams.map(s => {
+              const parts = [s.language?.toUpperCase(), s.title, s.channels ? s.channels + 'ch' : '', s.codec].filter(Boolean);
+              return `<option value="${s.index}" data-rel="${s.relative_index}" ${s.index === effAudio ? 'selected' : ''}>${parts.join(' · ')}</option>`;
+            }).join('')}
+          </select>
+        </div>`;
+      }
+
+      if (subStreams.length > 0) {
+        const effSub = f.selectedSubStreamIdx ?? null;
+        streamsHTML += `<div class="sel-file-streams">
+          <span class="stream-label">Subs:</span>
+          <select class="stream-select stream-sub" data-idx="${i}">
+            <option value="">No grabar</option>
+            ${subStreams.map(s => {
+              const parts = [s.language?.toUpperCase(), s.title, s.codec].filter(Boolean);
+              return `<option value="${s.index}" data-rel="${s.relative_index}" data-codec="${escapeHtml(s.codec)}" ${s.index === effSub ? 'selected' : ''}>${parts.join(' · ')}</option>`;
+            }).join('')}
+          </select>
+        </div>`;
+      }
     }
 
     return `<div class="sel-file">
@@ -1168,6 +1216,7 @@ function renderSelectedFiles() {
       </div>
       ${metaHTML}
       ${tagsHTML}
+      ${streamsHTML}
     </div>`;
   }).join('');
 
@@ -1177,6 +1226,30 @@ function renderSelectedFiles() {
       selectedFiles.splice(parseInt(btn.dataset.idx), 1);
       updateSelectionUI();
       checkInterlaced();
+    });
+  });
+
+  // Audio track selector
+  el.querySelectorAll('.stream-audio').forEach(sel => {
+    sel.addEventListener('change', () => {
+      selectedFiles[parseInt(sel.dataset.idx)].selectedAudioStreamIdx = parseInt(sel.value);
+    });
+  });
+
+  // Subtitle burn selector
+  el.querySelectorAll('.stream-sub').forEach(sel => {
+    sel.addEventListener('change', () => {
+      const entry = selectedFiles[parseInt(sel.dataset.idx)];
+      if (!sel.value) {
+        entry.selectedSubStreamIdx = null;
+        entry.selectedSubRelIdx = null;
+        entry.selectedSubCodec = null;
+      } else {
+        const opt = sel.options[sel.selectedIndex];
+        entry.selectedSubStreamIdx = parseInt(sel.value);
+        entry.selectedSubRelIdx = parseInt(opt.dataset.rel);
+        entry.selectedSubCodec = opt.dataset.codec;
+      }
     });
   });
 }
@@ -1359,16 +1432,80 @@ $('btnAddQueue').addEventListener('click', async () => {
       vfParts.push('setsar=1');
     }
     if (fpsNeeded) vfParts.push(`fps=${tFps}`);
-    const vf = vfParts.length ? ` -vf "${vfParts.join(',')}"` : '';
 
-    const audioStr = hasAudio ? `-c:a aac -b:a ${abr}k` : '-an';
+    // Stream selection
+    const audioStreams = f.probe?.audio_streams || [];
+    const selectedAudioGlobalIdx = f.selectedAudioStreamIdx ?? audioStreams[0]?.index ?? null;
+    const IMAGE_SUB_CODECS = new Set(['hdmv_pgs_subtitle','dvb_subtitle','xsub','dvd_subtitle']);
+    const selectedSub = (f.selectedSubStreamIdx != null)
+      ? { relIdx: f.selectedSubRelIdx, codec: f.selectedSubCodec }
+      : null;
+
+    const usingFilterComplex = selectedSub && IMAGE_SUB_CODECS.has(selectedSub.codec);
+    const needsAudioMap = usingFilterComplex || audioStreams.length > 1;
+    const audioMapIdx = selectedAudioGlobalIdx;
+
+    // Build vf string (or filter_complex for image-based subtitle burn)
+    let vf;
+    if (usingFilterComplex) {
+      // Scale subtitle proportionally to FIT within source video dimensions (no stretch,
+      // no crop), then overlay at original resolution centered horizontally, then apply
+      // scale/fps/etc to the composited video. eof_action=pass keeps video going when
+      // the subtitle track ends before the film ends.
+      const scaleSub = `[0:s:${selectedSub.relIdx}]scale=${srcW}:${srcH}:force_original_aspect_ratio=decrease[sub]`;
+      const overlayFilter = `[0:v][sub]overlay=x=(W-w)/2:eof_action=pass`;
+      if (vfParts.length) {
+        vf = ` -filter_complex "${scaleSub};${overlayFilter}[ov];[ov]${vfParts.join(',')}[vout]" -map "[vout]"`;
+      } else {
+        vf = ` -filter_complex "${scaleSub};${overlayFilter}[vout]" -map "[vout]"`;
+      }
+    } else if (selectedSub) {
+      // Text-based subtitle (SRT/ASS) — subtitles filter
+      const esc = f.path.replace(/\\/g, '/').replace(/:/g, '\\:');
+      vfParts.push(`subtitles='${esc}':si=${selectedSub.relIdx}`);
+      vf = ` -vf "${vfParts.join(',')}"`;
+    } else {
+      vf = vfParts.length ? ` -vf "${vfParts.join(',')}"` : '';
+    }
+
+    // Build audio string with explicit -map flags when needed
+    let audioStr;
+    if (!hasAudio) {
+      audioStr = '-an';
+    } else if (needsAudioMap && audioMapIdx !== null) {
+      if (usingFilterComplex) {
+        // -map "[vout]" already handles video; just map audio
+        audioStr = `-map 0:${audioMapIdx} -c:a aac -b:a ${abr}k`;
+      } else {
+        // No filter_complex — must map both video and audio explicitly
+        audioStr = `-map 0:v:0 -map 0:${audioMapIdx} -c:a aac -b:a ${abr}k`;
+      }
+    } else {
+      audioStr = `-c:a aac -b:a ${abr}k`;
+    }
+
     const output = f.path.replace(/\.[^.]+$/, '') + '_discord.mp4';
 
     let cmds;
     if (useBitrate) {
-      cmds = enc.buildBR(vbr, preset, 'yuv420p', vf, audioStr, f.path, output, nullDev, activePC.threads);
+      if (usingFilterComplex && enc.twoPass) {
+        // Pass 1 must NOT include the subtitle overlay — the overlay changes per-frame
+        // properties and causes x264/x265 2-pass stats to diverge massively (15 GB output).
+        // Run pass 1 with normal scale/fps filters only, pass 2 with the full overlay.
+        const vfPass1 = vfParts.length ? ` -vf "${vfParts.join(',')}"` : '';
+        const p1 = enc.buildBR(vbr, preset, 'yuv420p', vfPass1, '-an', f.path, output, nullDev, activePC.threads);
+        const p2 = enc.buildBR(vbr, preset, 'yuv420p', vf, audioStr, f.path, output, nullDev, activePC.threads);
+        cmds = [p1[0], p2[p2.length - 1]];
+      } else {
+        cmds = enc.buildBR(vbr, preset, 'yuv420p', vf, audioStr, f.path, output, nullDev, activePC.threads);
+      }
     } else {
       cmds = enc.buildCRF(crfVal, preset, 'yuv420p', vf, audioStr, f.path, output, activePC.threads);
+    }
+
+    // PGS subtitles need extra analysis time before ffmpeg can decode them
+    if (usingFilterComplex) {
+      cmds = cmds.map(cmd => cmd.replace('ffmpeg -y -i ', 'ffmpeg -y -probesize 100M -analyzeduration 100M -i '));
     }
 
     jobsToAdd.push({

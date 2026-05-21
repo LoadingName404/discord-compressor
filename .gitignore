@@ -33,5 +33,10 @@ htmlcov/
 # Logs and temporary files
 logs/
 *.log
+ffmpeg2pass-*.log.mbtree
+ffmpeg2pass-*.log
+*.temp
+**/x265stats
+**/x265stats.cutree
 
 .claude/

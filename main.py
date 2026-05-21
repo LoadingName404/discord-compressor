@@ -340,6 +340,30 @@ def probe():
             "bit_rate": fmt.get("bit_rate"),
         }
 
+        audio_streams = []
+        subtitle_streams = []
+        for s in probe_data.get("streams", []):
+            if s.get("codec_type") == "audio":
+                audio_streams.append({
+                    "index": s.get("index"),
+                    "relative_index": len(audio_streams),
+                    "codec": s.get("codec_name", ""),
+                    "channels": s.get("channels", 0),
+                    "channel_layout": s.get("channel_layout", ""),
+                    "language": s.get("tags", {}).get("language", ""),
+                    "title": s.get("tags", {}).get("title", ""),
+                })
+            elif s.get("codec_type") == "subtitle":
+                subtitle_streams.append({
+                    "index": s.get("index"),
+                    "relative_index": len(subtitle_streams),
+                    "codec": s.get("codec_name", ""),
+                    "language": s.get("tags", {}).get("language", ""),
+                    "title": s.get("tags", {}).get("title", ""),
+                })
+        info["audio_streams"] = audio_streams
+        info["subtitle_streams"] = subtitle_streams
+
         return jsonify(info)
 
     except FileNotFoundError:
