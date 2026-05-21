@@ -586,7 +586,6 @@ $('btnAddQueue').addEventListener('click', async () => {
       : null;
 
     const usingFilterComplex = selectedSub && IMAGE_SUB_CODECS.has(selectedSub.codec);
-    const needsAudioMap = usingFilterComplex || audioStreams.length > 1;
     const audioMapIdx = selectedAudioGlobalIdx;
 
     // Build vf string (or filter_complex for image-based subtitle burn)
@@ -612,20 +611,19 @@ $('btnAddQueue').addEventListener('click', async () => {
       vf = vfParts.length ? ` -vf "${vfParts.join(',')}"` : '';
     }
 
-    // Build audio string with explicit -map flags when needed
+    // Always use explicit stream mapping to strip chapters, data tracks, and unwanted streams.
+    // -ac 2 downmixes multi-channel audio to stereo so 96kbps sounds as expected.
+    const META_FLAGS = '-map_chapters -1 -dn';
     let audioStr;
-    if (!hasAudio) {
-      audioStr = '-an';
-    } else if (needsAudioMap && audioMapIdx !== null) {
-      if (usingFilterComplex) {
-        // -map "[vout]" already handles video; just map audio
-        audioStr = `-map 0:${audioMapIdx} -c:a aac -b:a ${abr}k`;
-      } else {
-        // No filter_complex — must map both video and audio explicitly
-        audioStr = `-map 0:v:0 -map 0:${audioMapIdx} -c:a aac -b:a ${abr}k`;
-      }
+    if (!hasAudio || audioMapIdx === null) {
+      audioStr = usingFilterComplex
+        ? `-an ${META_FLAGS}`
+        : `-map 0:v:0 -an ${META_FLAGS}`;
+    } else if (usingFilterComplex) {
+      // -map "[vout]" already handles video in vf; map audio explicitly
+      audioStr = `-map 0:${audioMapIdx} -c:a aac -b:a ${abr}k -ac 2 ${META_FLAGS}`;
     } else {
-      audioStr = `-c:a aac -b:a ${abr}k`;
+      audioStr = `-map 0:v:0 -map 0:${audioMapIdx} -c:a aac -b:a ${abr}k -ac 2 ${META_FLAGS}`;
     }
 
     const output = f.path.replace(/\.[^.]+$/, '') + '_discord.mp4';
