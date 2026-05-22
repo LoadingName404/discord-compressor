@@ -1,5 +1,14 @@
 const $ = id => document.getElementById(id);
 
+// Adapts a vf/filter_complex string for VAAPI by injecting format=nv12,hwupload
+// before the GPU encoder. Works for both simple -vf and -filter_complex cases.
+function _vaapiVf(vf) {
+  if (vf.includes('-filter_complex'))
+    return vf.replace('[vout]" -map "[vout]"', ',format=nv12,hwupload[vout]" -map "[vout]"');
+  const m = vf.match(/^ -vf "(.+)"$/);
+  return m ? ` -vf "${m[1]},format=nv12,hwupload"` : ' -vf "format=nv12,hwupload"';
+}
+
 // ═══════════════════════════════════════════════════
 //  PC PROFILES & ENCODERS
 // ═══════════════════════════════════════════════════
@@ -75,15 +84,11 @@ const ENCODERS = {
     hint: 'VAAPI — iGPU Intel (Linux) · quality=velocidad 0→más lento/mejor',
     buildBR: (br,pr,pf,vf,au,inp,out) => {
       const q = {quality:0, balanced:4, speed:7}[pr] ?? 0;
-      const m = vf.match(/^ -vf "(.+)"$/);
-      const hwvf = m ? ` -vf "${m[1]},format=nv12,hwupload"` : ' -vf "format=nv12,hwupload"';
-      return [`ffmpeg -y -vaapi_device /dev/dri/renderD128 -i "${inp}"${hwvf} -c:v h264_vaapi -b:v ${br}k -quality ${q} ${au} "${out}"`];
+      return [`ffmpeg -y -vaapi_device /dev/dri/renderD128 -i "${inp}"${_vaapiVf(vf)} -c:v h264_vaapi -b:v ${br}k -quality ${q} ${au} "${out}"`];
     },
     buildCRF: (qp,pr,pf,vf,au,inp,out) => {
       const q = {quality:0, balanced:4, speed:7}[pr] ?? 0;
-      const m = vf.match(/^ -vf "(.+)"$/);
-      const hwvf = m ? ` -vf "${m[1]},format=nv12,hwupload"` : ' -vf "format=nv12,hwupload"';
-      return [`ffmpeg -y -vaapi_device /dev/dri/renderD128 -i "${inp}"${hwvf} -c:v h264_vaapi -qp ${qp} -quality ${q} ${au} "${out}"`];
+      return [`ffmpeg -y -vaapi_device /dev/dri/renderD128 -i "${inp}"${_vaapiVf(vf)} -c:v h264_vaapi -qp ${qp} -quality ${q} ${au} "${out}"`];
     },
   },
   hevc_vaapi: {
@@ -92,15 +97,11 @@ const ENCODERS = {
     hint: 'VAAPI HEVC — mejor compresión (Linux) · quality=velocidad 0→más lento/mejor',
     buildBR: (br,pr,pf,vf,au,inp,out) => {
       const q = {quality:0, balanced:4, speed:7}[pr] ?? 0;
-      const m = vf.match(/^ -vf "(.+)"$/);
-      const hwvf = m ? ` -vf "${m[1]},format=nv12,hwupload"` : ' -vf "format=nv12,hwupload"';
-      return [`ffmpeg -y -vaapi_device /dev/dri/renderD128 -i "${inp}"${hwvf} -c:v hevc_vaapi -b:v ${br}k -quality ${q} -tag:v hvc1 ${au} "${out}"`];
+      return [`ffmpeg -y -vaapi_device /dev/dri/renderD128 -i "${inp}"${_vaapiVf(vf)} -c:v hevc_vaapi -b:v ${br}k -quality ${q} -tag:v hvc1 ${au} "${out}"`];
     },
     buildCRF: (qp,pr,pf,vf,au,inp,out) => {
       const q = {quality:0, balanced:4, speed:7}[pr] ?? 0;
-      const m = vf.match(/^ -vf "(.+)"$/);
-      const hwvf = m ? ` -vf "${m[1]},format=nv12,hwupload"` : ' -vf "format=nv12,hwupload"';
-      return [`ffmpeg -y -vaapi_device /dev/dri/renderD128 -i "${inp}"${hwvf} -c:v hevc_vaapi -qp ${qp} -quality ${q} -tag:v hvc1 ${au} "${out}"`];
+      return [`ffmpeg -y -vaapi_device /dev/dri/renderD128 -i "${inp}"${_vaapiVf(vf)} -c:v hevc_vaapi -qp ${qp} -quality ${q} -tag:v hvc1 ${au} "${out}"`];
     },
   },
 };
@@ -509,8 +510,10 @@ $('btnAddQueue').addEventListener('click', async () => {
   const preset = $('preset').value;
   const abr = parseInt($('audioBitrate').value);
   const hasAudio = $('includeAudio').checked;
-  const resOv = $('resOverride').value;
-  const fpsOv = $('fpsOverride').value;
+  const resMax = parseInt($('resMax').value);
+  const resMin = parseInt($('resMin').value);
+  const fpsMax = parseInt($('fpsMax').value);
+  const fpsMin = parseInt($('fpsMin').value);
   const isConvert = currentMode === 'convert';
   const sizeLimitMB = isConvert ? 0 : (parseFloat($('sizeLimit').value) || 10);
   const crfVal = parseInt($('crfValue').value) || 20;
@@ -541,25 +544,39 @@ $('btnAddQueue').addEventListener('click', async () => {
       if (vbr < 50) vbr = 50;
     }
 
-    // FPS
+    // FPS — auto-select based on bitrate, clamped to [fpsMin, min(fpsMax, srcFps)]
     let tFps = srcFps, fpsNeeded = false;
-    if (fpsOv === 'auto') {
-      if (useBitrate) { tFps = vbr < 400 ? 24 : vbr < 800 ? 30 : srcFps; }
+    {
+      const autoFps = !useBitrate ? 60
+        : vbr < 150 ? 15
+        : vbr < 400 ? 24
+        : vbr < 800 ? 30
+        : 60;
+      const effectiveFpsMax = Math.min(fpsMax, srcFps);
+      tFps = Math.min(autoFps, effectiveFpsMax);
+      if (useBitrate) tFps = Math.max(tFps, Math.min(fpsMin, effectiveFpsMax));
       fpsNeeded = tFps < srcFps;
-    } else if (fpsOv !== 'source') {
-      tFps = parseInt(fpsOv);
-      fpsNeeded = tFps !== srcFps;
     }
 
-    // Resolution
+    // Resolution — auto-select based on bitrate, clamped to [resMin, min(resMax, srcH)]
     let tH = srcH, scaleNeeded = false;
-    if (resOv === 'auto') {
-      if (useBitrate) {
-        tH = vbr < 300 ? 360 : vbr < 700 ? 480 : vbr < 1500 ? 720 : vbr < 4000 ? 1080 : srcH;
-        if (tH >= srcH) tH = srcH; else scaleNeeded = true;
-      }
-    } else if (resOv !== 'source') {
-      tH = parseInt(resOv);
+    {
+      const autoH = !useBitrate ? srcH
+        : vbr < 80   ? 180
+        : vbr < 200  ? 360
+        : vbr < 450  ? 540
+        : vbr < 900  ? 720
+        : vbr < 1800 ? 900
+        : vbr < 2160 ? 1080
+        : vbr < 3000 ? 1260
+        : vbr < 5000 ? 1440
+        : vbr < 7000 ? 1620
+        : vbr < 10000 ? 1800
+        : vbr < 14000 ? 1980
+        : 2160;
+      const effectiveMax = Math.min(resMax, srcH);
+      tH = Math.min(autoH, effectiveMax);
+      tH = Math.max(tH, Math.min(resMin, effectiveMax));
       scaleNeeded = tH !== srcH;
     }
 
@@ -647,7 +664,7 @@ $('btnAddQueue').addEventListener('click', async () => {
 
     // PGS subtitles need extra analysis time before ffmpeg can decode them
     if (usingFilterComplex) {
-      cmds = cmds.map(cmd => cmd.replace('ffmpeg -y -i ', 'ffmpeg -y -probesize 100M -analyzeduration 100M -i '));
+      cmds = cmds.map(cmd => cmd.replace('ffmpeg -y ', 'ffmpeg -y -probesize 100M -analyzeduration 100M '));
     }
 
     jobsToAdd.push({
@@ -988,6 +1005,26 @@ $('wizBtnSave').addEventListener('click', async () => {
 });
 
 $('wizBtnDone').addEventListener('click', closeWizard);
+
+// ═══════════════════════════════════════════════════
+//  RES / FPS MAX·MIN SYNC
+// ═══════════════════════════════════════════════════
+$('resMax').addEventListener('change', () => {
+  if (parseInt($('resMax').value) < parseInt($('resMin').value))
+    $('resMin').value = $('resMax').value;
+});
+$('resMin').addEventListener('change', () => {
+  if (parseInt($('resMin').value) > parseInt($('resMax').value))
+    $('resMax').value = $('resMin').value;
+});
+$('fpsMax').addEventListener('change', () => {
+  if (parseInt($('fpsMax').value) < parseInt($('fpsMin').value))
+    $('fpsMin').value = $('fpsMax').value;
+});
+$('fpsMin').addEventListener('change', () => {
+  if (parseInt($('fpsMin').value) > parseInt($('fpsMax').value))
+    $('fpsMax').value = $('fpsMin').value;
+});
 
 // ═══════════════════════════════════════════════════
 //  BOOT

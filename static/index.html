@@ -165,15 +165,37 @@
         <div class="setting-row">
           <div>
             <div class="setting-label">Resolución</div>
+            <div class="setting-hint">máx · mín</div>
           </div>
           <div class="setting-control">
-            <select class="s-select" id="resOverride">
-              <option value="auto" selected>Auto</option>
-              <option value="source">Mantener original</option>
+            <select class="s-select" id="resMax" style="flex:1;width:auto">
+              <option value="2160">2160p</option>
+              <option value="1980">1980p</option>
+              <option value="1800">1800p</option>
+              <option value="1620">1620p</option>
+              <option value="1440">1440p</option>
+              <option value="1260">1260p</option>
               <option value="1080">1080p</option>
+              <option value="900">900p</option>
               <option value="720">720p</option>
-              <option value="480">480p</option>
+              <option value="540">540p</option>
               <option value="360">360p</option>
+              <option value="180">180p</option>
+            </select>
+            <span style="color:var(--muted);font-size:11px;flex-shrink:0">/</span>
+            <select class="s-select" id="resMin" style="flex:1;width:auto">
+              <option value="2160">2160p</option>
+              <option value="1980">1980p</option>
+              <option value="1800">1800p</option>
+              <option value="1620">1620p</option>
+              <option value="1440">1440p</option>
+              <option value="1260">1260p</option>
+              <option value="1080">1080p</option>
+              <option value="900">900p</option>
+              <option value="720">720p</option>
+              <option value="540">540p</option>
+              <option value="360">360p</option>
+              <option value="180" selected>180p</option>
             </select>
           </div>
         </div>
@@ -181,14 +203,21 @@
         <div class="setting-row">
           <div>
             <div class="setting-label">FPS</div>
+            <div class="setting-hint">máx · mín</div>
           </div>
           <div class="setting-control">
-            <select class="s-select" id="fpsOverride">
-              <option value="auto" selected>Auto</option>
-              <option value="source">Mantener</option>
+            <select class="s-select" id="fpsMax" style="flex:1;width:auto">
               <option value="60">60</option>
               <option value="30">30</option>
               <option value="24">24</option>
+              <option value="15">15</option>
+            </select>
+            <span style="color:var(--muted);font-size:11px;flex-shrink:0">/</span>
+            <select class="s-select" id="fpsMin" style="flex:1;width:auto">
+              <option value="60">60</option>
+              <option value="30">30</option>
+              <option value="24">24</option>
+              <option value="15" selected>15</option>
             </select>
           </div>
         </div>
