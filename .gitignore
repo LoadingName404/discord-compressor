@@ -40,3 +40,4 @@ ffmpeg2pass-*.log
 **/x265stats.cutree
 
 .claude/
+.env

@@ -70,7 +70,7 @@ Los valores de `hwEncoders` y `swEncoders` tienen que coincidir con los IDs de e
 - **Explorador de archivos** integrado, con soporte de unidades en Windows
 - **Detección automática** de video entrelazado (480i, 1080i) con deinterlace yadif/bwdif
 - **Corrección de SAR** para videos con píxeles no cuadrados (formato HandyCam, DVD anamórfico)
-- **Log rotativo** en `logs/` con visor integrado en la UI
+- **Log rotativo** en `logs/` con visor integrado en la UI (desactivable con `SAVE_LOGS=false`)
 
 ## Requisitos
 
@@ -91,8 +91,24 @@ venv\Scripts\activate
 # Linux / macOS
 source venv/bin/activate
 
-pip install flask
+pip install -r requirements.txt
 ```
+
+## Configuración
+
+Copiá el archivo de ejemplo y editalo según tu setup:
+
+```bash
+cp .env.example .env
+```
+
+| Variable | Default | Descripción |
+|---|---|---|
+| `HOST` | `127.0.0.1` | IP en la que escucha el servidor |
+| `PORT` | `5000` | Puerto |
+| `SAVE_LOGS` | `true` | `false` para no escribir archivos de log en `logs/` |
+
+Para exponer el servidor en la red local (útil para acceder desde otro equipo), usá `HOST=0.0.0.0`.
 
 ## Uso
 
@@ -125,11 +141,12 @@ Abre `http://localhost:5000` en el navegador (o la IP de la máquina si corrés 
 ```
 discord-compressor/
 ├── main.py               # Servidor Flask + worker ffmpeg + API del wizard
+├── .env.example          # Plantilla de configuración
 ├── profiles/
 │   ├── desktop.json      # Perfil Desktop
 │   ├── laptop.json       # Perfil Laptop
 │   └── thinkcentre.json  # Perfil ThinkCentre
-├── logs/                 # Logs por sesión (generados al correr)
+├── logs/                 # Logs por sesión (generados al correr, opcional)
 └── static/
     └── index.html        # UI completa (JS vanilla, sin dependencias de build)
 ```

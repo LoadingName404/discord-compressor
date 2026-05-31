@@ -19,36 +19,41 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
+from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, request, send_from_directory
+
+load_dotenv()
 
 app = Flask(__name__, static_folder="static")
 
-# ─── Logging ────────────────────────────────────────────────────────────────
-_LOGS_DIR = Path(__file__).parent / "logs"
-_LOGS_DIR.mkdir(exist_ok=True)
+# ─── Configuration ───────────────────────────────────────────────────────────
+HOST = os.environ.get("HOST", "127.0.0.1")
+PORT = int(os.environ.get("PORT", 5000))
+SAVE_LOGS = os.environ.get("SAVE_LOGS", "true").lower() not in ("false", "0", "no")
 
+# ─── Logging ────────────────────────────────────────────────────────────────
 _session_ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-LOG_FILE = _LOGS_DIR / f"{_session_ts}.log"
+LOG_FILE: Path | None = None
 
 _log_fmt = logging.Formatter("%(asctime)s [%(levelname)-7s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
 
 log = logging.getLogger("compressor")
 log.setLevel(logging.DEBUG)
 
-_fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
-_fh.setLevel(logging.DEBUG)
-_fh.setFormatter(_log_fmt)
+if SAVE_LOGS:
+    _LOGS_DIR = Path(__file__).parent / "logs"
+    _LOGS_DIR.mkdir(exist_ok=True)
+    LOG_FILE = _LOGS_DIR / f"{_session_ts}.log"
+    _fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
+    _fh.setLevel(logging.DEBUG)
+    _fh.setFormatter(_log_fmt)
+    log.addHandler(_fh)
 
 _ch = logging.StreamHandler(sys.stdout)
 _ch.setLevel(logging.INFO)
 _ch.setFormatter(_log_fmt)
-
-log.addHandler(_fh)
 log.addHandler(_ch)
 
-# ─── Configuration ───────────────────────────────────────────────────────────
-HOST = "127.0.0.1"
-PORT = 5000
 # Starting directory for the file browser
 if platform.system() == "Windows":
     DEFAULT_ROOT = str(Path.home() / "Videos")
@@ -469,6 +474,8 @@ def get_logs():
     """Return last N lines of the log file, optionally filtered by level."""
     n = min(int(request.args.get("n", 300)), 1000)
     level = request.args.get("level", "all").upper()
+    if not SAVE_LOGS or LOG_FILE is None:
+        return jsonify({"lines": [], "file": None, "disabled": True})
     try:
         with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
@@ -674,13 +681,14 @@ def main():
             print("Install ffmpeg: https://ffmpeg.org/download.html")
             sys.exit(1)
 
-    log.info("Server starting — http://%s:%d  log: %s", HOST, PORT, LOG_FILE)
+    log_label = f"logs/{_session_ts}.log" if SAVE_LOGS else "disabled"
+    log.info("Server starting — http://%s:%d  log: %s", HOST, PORT, log_label)
 
     print(f"""
 ╔══════════════════════════════════════════════╗
 ║   Discord Video Compressor                   ║
 ║   http://{HOST}:{PORT}                       ║
-║   Log: logs/{_session_ts}.log               ║
+║   Log: {log_label:<37}║
 ║   Press Ctrl+C to stop                       ║
 ╚══════════════════════════════════════════════╝
 """)
